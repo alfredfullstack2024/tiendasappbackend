@@ -38,18 +38,17 @@ mongoose
   .then(() => console.log("✅ Conectado a MongoDB"))
   .catch((err) => console.error("❌ Error conectando a MongoDB:", err));
 
-// Esquema de la tienda
+// =================== ESQUEMA DE LA TIENDA ===================
+const reseñaSchema = new mongoose.Schema({
+  usuario: { type: String, required: true, trim: true },
+  comentario: { type: String, trim: true },
+  calificacion: { type: Number, required: true, min: 1, max: 5 },
+  fecha: { type: Date, default: Date.now },
+});
+
 const tiendaSchema = new mongoose.Schema({
-  nombreEstablecimiento: {
-    type: String,
-    required: true,
-    trim: true,
-  },
-  direccion: {
-    type: String,
-    required: true,
-    trim: true,
-  },
+  nombreEstablecimiento: { type: String, required: true, trim: true },
+  direccion: { type: String, required: true, trim: true },
   categoria: {
     type: String,
     required: true,
@@ -74,40 +73,14 @@ const tiendaSchema = new mongoose.Schema({
       "Vidrierías",
     ],
   },
-  telefonoWhatsapp: {
-    type: String,
-    required: true,
-    trim: true,
-  },
-  fotos: [
-    {
-      url: String,
-      public_id: String,
-    },
-  ],
-  descripcionVentas: {
-    type: String,
-    required: true,
-    trim: true,
-  },
-  paginaWeb: {
-    type: String,
-    trim: true,
-    default: "",
-  },
-  redesSociales: {
-    type: String,
-    trim: true,
-    default: "",
-  },
-  fechaCreacion: {
-    type: Date,
-    default: Date.now,
-  },
-  activa: {
-    type: Boolean,
-    default: true,
-  },
+  telefonoWhatsapp: { type: String, required: true, trim: true },
+  fotos: [{ url: String, public_id: String }],
+  descripcionVentas: { type: String, required: true, trim: true },
+  paginaWeb: { type: String, trim: true, default: "" },
+  redesSociales: { type: String, trim: true, default: "" },
+  fechaCreacion: { type: Date, default: Date.now },
+  activa: { type: Boolean, default: true },
+  reseñas: [reseñaSchema], // Subdocumento de reseñas
 });
 
 const Tienda = mongoose.model("Tienda", tiendaSchema);
@@ -163,9 +136,6 @@ app.get("/api/categorias", (req, res) => {
 // Registrar nueva tienda
 app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
   try {
-    console.log("📝 Datos recibidos:", req.body);
-    console.log("🖼️ Archivos recibidos:", req.files?.length || 0);
-
     const {
       nombreEstablecimiento,
       direccion,
@@ -176,7 +146,6 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
       redesSociales,
     } = req.body;
 
-    // Validaciones básicas
     if (
       !nombreEstablecimiento ||
       !direccion ||
@@ -184,16 +153,11 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
       !telefonoWhatsapp ||
       !descripcionVentas
     ) {
-      return res.status(400).json({
-        error: "Faltan campos obligatorios",
-      });
+      return res.status(400).json({ error: "Faltan campos obligatorios" });
     }
 
-    // Subir imágenes a Cloudinary
     const fotosSubidas = [];
     if (req.files && req.files.length > 0) {
-      console.log("⬆️ Subiendo imágenes a Cloudinary...");
-
       for (let i = 0; i < req.files.length; i++) {
         const file = req.files[i];
         const fileName = `${Date.now()}_${i}_${nombreEstablecimiento.replace(
@@ -207,19 +171,17 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
             url: resultado.secure_url,
             public_id: resultado.public_id,
           });
-          console.log(`✅ Imagen ${i + 1} subida correctamente`);
         } catch (error) {
           console.error(`❌ Error subiendo imagen ${i + 1}:`, error);
         }
       }
     }
 
-    // Crear nueva tienda
     const nuevaTienda = new Tienda({
       nombreEstablecimiento,
       direccion,
       categoria,
-      telefonoWhatsapp: telefonoWhatsapp.replace(/\D/g, ""), // Solo números
+      telefonoWhatsapp: telefonoWhatsapp.replace(/\D/g, ""),
       fotos: fotosSubidas,
       descripcionVentas,
       paginaWeb: paginaWeb || "",
@@ -227,21 +189,13 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
     });
 
     const tiendaGuardada = await nuevaTienda.save();
-    console.log(
-      "✅ Tienda guardada en MongoDB:",
-      tiendaGuardada.nombreEstablecimiento
-    );
-
     res.status(201).json({
       mensaje: "Tienda registrada exitosamente",
       tienda: tiendaGuardada,
     });
   } catch (error) {
     console.error("❌ Error registrando tienda:", error);
-    res.status(500).json({
-      error: "Error interno del servidor",
-      detalles: error.message,
-    });
+    res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
@@ -249,14 +203,9 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
 app.get("/api/tiendas/categoria/:categoria", async (req, res) => {
   try {
     const { categoria } = req.params;
-    console.log("🔍 Buscando tiendas en categoría:", categoria);
-
-    const tiendas = await Tienda.find({
-      categoria: categoria,
-      activa: true,
-    }).sort({ nombreEstablecimiento: 1 }); // Ordenar alfabéticamente
-
-    console.log(`📊 Encontradas ${tiendas.length} tiendas en ${categoria}`);
+    const tiendas = await Tienda.find({ categoria, activa: true }).sort({
+      nombreEstablecimiento: 1,
+    });
     res.json(tiendas);
   } catch (error) {
     console.error("❌ Error obteniendo tiendas por categoría:", error);
@@ -268,10 +217,7 @@ app.get("/api/tiendas/categoria/:categoria", async (req, res) => {
 app.get("/api/tiendas/:id", async (req, res) => {
   try {
     const tienda = await Tienda.findById(req.params.id);
-    if (!tienda) {
-      return res.status(404).json({ error: "Tienda no encontrada" });
-    }
-    console.log("🏪 Tienda encontrada:", tienda.nombreEstablecimiento);
+    if (!tienda) return res.status(404).json({ error: "Tienda no encontrada" });
     res.json(tienda);
   } catch (error) {
     console.error("❌ Error obteniendo tienda:", error);
@@ -285,7 +231,6 @@ app.get("/api/tiendas", async (req, res) => {
     const tiendas = await Tienda.find({ activa: true }).sort({
       nombreEstablecimiento: 1,
     });
-    console.log(`📊 Total de tiendas activas: ${tiendas.length}`);
     res.json(tiendas);
   } catch (error) {
     console.error("❌ Error obteniendo tiendas:", error);
@@ -293,7 +238,45 @@ app.get("/api/tiendas", async (req, res) => {
   }
 });
 
-// Ruta de salud para verificar que el servidor funciona
+// =================== RUTAS DE RESEÑAS ===================
+
+// Obtener reseñas de una tienda
+app.get("/api/tiendas/:id/reviews", async (req, res) => {
+  try {
+    const tienda = await Tienda.findById(req.params.id).select("reseñas");
+    if (!tienda) return res.status(404).json({ error: "Tienda no encontrada" });
+    res.json(tienda.reseñas);
+  } catch (error) {
+    console.error("❌ Error obteniendo reseñas:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+
+// Agregar reseña a una tienda
+app.post("/api/tiendas/:id/reviews", async (req, res) => {
+  try {
+    const { usuario, comentario, calificacion } = req.body;
+    if (!usuario || !calificacion) {
+      return res
+        .status(400)
+        .json({ error: "Usuario y calificación son obligatorios" });
+    }
+
+    const tienda = await Tienda.findById(req.params.id);
+    if (!tienda) return res.status(404).json({ error: "Tienda no encontrada" });
+
+    const nuevaReseña = { usuario, comentario, calificacion };
+    tienda.reseñas.push(nuevaReseña);
+    await tienda.save();
+
+    res.status(201).json({ mensaje: "Reseña agregada con éxito", reseña: nuevaReseña });
+  } catch (error) {
+    console.error("❌ Error agregando reseña:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+
+// Ruta de salud
 app.get("/health", (req, res) => {
   res.json({
     status: "OK",

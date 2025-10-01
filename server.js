@@ -9,27 +9,27 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Configuración de Cloudinary para subir imágenes
+// =================== CONFIGURACIÓN CLOUDINARY ===================
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Middleware
+// =================== MIDDLEWARE ===================
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Configuración de multer para manejo de archivos
+// =================== MULTER ===================
 const storage = multer.memoryStorage();
 const upload = multer({
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // Máx 5MB
 });
 
-// Conexión a MongoDB
+// =================== CONEXIÓN MONGO ===================
 mongoose
   .connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
@@ -38,7 +38,7 @@ mongoose
   .then(() => console.log("✅ Conectado a MongoDB"))
   .catch((err) => console.error("❌ Error conectando a MongoDB:", err));
 
-// =================== ESQUEMA DE LA TIENDA ===================
+// =================== SCHEMAS ===================
 const reseñaSchema = new mongoose.Schema({
   usuario: { type: String, required: true, trim: true },
   comentario: { type: String, trim: true },
@@ -80,12 +80,12 @@ const tiendaSchema = new mongoose.Schema({
   redesSociales: { type: String, trim: true, default: "" },
   fechaCreacion: { type: Date, default: Date.now },
   activa: { type: Boolean, default: true },
-  reseñas: [reseñaSchema], // Subdocumento de reseñas
+  reseñas: [reseñaSchema],
 });
 
 const Tienda = mongoose.model("Tienda", tiendaSchema);
 
-// Función para subir imagen a Cloudinary
+// =================== FUNCIONES AUX ===================
 const subirImagenCloudinary = async (buffer, fileName) => {
   return new Promise((resolve, reject) => {
     cloudinary.uploader
@@ -106,11 +106,11 @@ const subirImagenCloudinary = async (buffer, fileName) => {
   });
 };
 
-// =================== RUTAS DE LA API ===================
+// =================== RUTAS API ===================
 
-// Obtener todas las categorías
+// Categorías
 app.get("/api/categorias", (req, res) => {
-  const categorias = [
+  res.json([
     "Comidas y Restaurantes",
     "Tecnología y Desarrollo",
     "Gimnasios",
@@ -129,11 +129,10 @@ app.get("/api/categorias", (req, res) => {
     "Tiendas Deportivas",
     "Veterinarias",
     "Vidrierías",
-  ];
-  res.json(categorias);
+  ]);
 });
 
-// Registrar nueva tienda
+// Crear tienda
 app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
   try {
     const {
@@ -156,6 +155,7 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
       return res.status(400).json({ error: "Faltan campos obligatorios" });
     }
 
+    // Procesar fotos
     const fotosSubidas = [];
     if (req.files && req.files.length > 0) {
       for (let i = 0; i < req.files.length; i++) {
@@ -199,13 +199,13 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
   }
 });
 
-// Obtener tiendas por categoría
+// Listar tiendas por categoría
 app.get("/api/tiendas/categoria/:categoria", async (req, res) => {
   try {
-    const { categoria } = req.params;
-    const tiendas = await Tienda.find({ categoria, activa: true }).sort({
-      nombreEstablecimiento: 1,
-    });
+    const tiendas = await Tienda.find({
+      categoria: req.params.categoria,
+      activa: true,
+    }).sort({ nombreEstablecimiento: 1 });
     res.json(tiendas);
   } catch (error) {
     console.error("❌ Error obteniendo tiendas por categoría:", error);
@@ -213,11 +213,16 @@ app.get("/api/tiendas/categoria/:categoria", async (req, res) => {
   }
 });
 
-// Obtener tienda por ID
+// Obtener tienda por ID (validando ObjectId)
 app.get("/api/tiendas/:id", async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "ID inválido" });
+    }
+
     const tienda = await Tienda.findById(req.params.id);
     if (!tienda) return res.status(404).json({ error: "Tienda no encontrada" });
+
     res.json(tienda);
   } catch (error) {
     console.error("❌ Error obteniendo tienda:", error);
@@ -225,7 +230,7 @@ app.get("/api/tiendas/:id", async (req, res) => {
   }
 });
 
-// Obtener todas las tiendas
+// Todas las tiendas
 app.get("/api/tiendas", async (req, res) => {
   try {
     const tiendas = await Tienda.find({ activa: true }).sort({
@@ -238,13 +243,16 @@ app.get("/api/tiendas", async (req, res) => {
   }
 });
 
-// =================== RUTAS DE RESEÑAS ===================
-
-// Obtener reseñas de una tienda
+// Reseñas
 app.get("/api/tiendas/:id/reviews", async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "ID inválido" });
+    }
+
     const tienda = await Tienda.findById(req.params.id).select("reseñas");
     if (!tienda) return res.status(404).json({ error: "Tienda no encontrada" });
+
     res.json(tienda.reseñas);
   } catch (error) {
     console.error("❌ Error obteniendo reseñas:", error);
@@ -252,14 +260,18 @@ app.get("/api/tiendas/:id/reviews", async (req, res) => {
   }
 });
 
-// Agregar reseña a una tienda
 app.post("/api/tiendas/:id/reviews", async (req, res) => {
   try {
     const { usuario, comentario, calificacion } = req.body;
+
     if (!usuario || !calificacion) {
       return res
         .status(400)
         .json({ error: "Usuario y calificación son obligatorios" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "ID inválido" });
     }
 
     const tienda = await Tienda.findById(req.params.id);
@@ -269,14 +281,17 @@ app.post("/api/tiendas/:id/reviews", async (req, res) => {
     tienda.reseñas.push(nuevaReseña);
     await tienda.save();
 
-    res.status(201).json({ mensaje: "Reseña agregada con éxito", reseña: nuevaReseña });
+    res.status(201).json({
+      mensaje: "Reseña agregada con éxito",
+      reseña: nuevaReseña,
+    });
   } catch (error) {
     console.error("❌ Error agregando reseña:", error);
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
-// Ruta de salud
+// Health check
 app.get("/health", (req, res) => {
   res.json({
     status: "OK",
@@ -285,12 +300,12 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Manejo de rutas no encontradas
+// Manejo de rutas inválidas
 app.use("*", (req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });
 });
 
-// Iniciar servidor
+// =================== INICIAR SERVIDOR ===================
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
   console.log(`🌐 Health check: http://localhost:${PORT}/health`);

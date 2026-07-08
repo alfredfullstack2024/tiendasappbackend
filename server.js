@@ -48,30 +48,58 @@ const reseñaSchema = new mongoose.Schema({
 
 const tiendaSchema = new mongoose.Schema({
   nombreEstablecimiento: { type: String, required: true, trim: true },
+  ciudad: {
+  type: String,
+  required: true,
+  trim: true,
+  enum: [
+    "Zipaquirá",
+    "Chía",
+    "Cajicá",
+    "Cota",
+  ],
+},
   direccion: { type: String, required: true, trim: true },
   categoria: {
     type: String,
     required: true,
     enum: [
-      "Comidas y Restaurantes",
-      "Tecnología y Desarrollo",
-      "Gimnasios",
-      "Papelería y Librerías",
-      "Mascotas",
-      "Odontología",
-      "Ópticas",
-      "Pastelerías",
-      "Pizzerías",
-      "Ropa de Niños",
-      "Ropa de Mujeres",
-      "Ropa Deportiva",
-      "Salones de Belleza",
-      "SPA",
-      "Talleres de Mecánica",
-      "Tiendas Deportivas",
-      "Veterinarias",
-      "Vidrierías",
-    ],
+  "Agricultura y Campo",
+  "Almacenes y Supermercados",
+  "Automotriz",
+  "Cafeterías",
+  "Clínicas",
+  "Comidas y Restaurantes",
+  "Consultorías",
+  "Educación y Capacitación",
+  "Electrodomésticos",
+  "Ferreterías",
+  "Floristerías",
+  "Gimnasios",
+  "Hoteles y Alojamiento",
+  "Inmobiliarias",
+  "Joyería y Accesorios",
+  "Jurídico",
+  "Laboratorios Clínicos",
+  "Mascotas",
+  "Odontología",
+  "Ópticas",
+  "Papelería y Librerías",
+  "Pastelerías",
+  "Pizzerías",
+  "Ropa de Hombres",
+  "Ropa de Mujeres",
+  "Ropa de Niños",
+  "Ropa Deportiva",
+  "Salones de Belleza",
+  "SPA",
+  "Seguridad",
+  "Tecnología y Desarrollo",
+  "Tiendas Deportivas",
+  "Talleres de Mecánica",
+  "Veterinarias",
+  "Vidrierías"
+],
   },
   telefonoWhatsapp: { type: String, required: true, trim: true },
   fotos: [{ url: String, public_id: String }],
@@ -111,24 +139,41 @@ const subirImagenCloudinary = async (buffer, fileName) => {
 // Categorías
 app.get("/api/categorias", (req, res) => {
   res.json([
-    "Comidas y Restaurantes",
+    "Agricultura y Campo",
+  "Almacenes y Supermercados",
+  "Automotriz",
+  "Cafeterías",
+  "Clínicas",
+  "Comidas y Restaurantes",
+  "Consultorías",
+  "Educación y Capacitación",
+  "Electrodomésticos",
+  "Ferreterías",
+  "Floristerías",
+  "Gimnasios",
+     "Hoteles y Alojamiento",
+  "Inmobiliarias",
+  "Joyería y Accesorios",
+  "Jurídico",
+  "Laboratorios Clínicos",
+  "Mascotas",
+  "Odontología",
+  "Ópticas",
+  "Papelería y Librerías",
+  "Pastelerías",
+  "Pizzerías",
+  "Ropa de Hombres",
+  "Ropa de Mujeres",
+  "Ropa de Niños",
+  "Ropa Deportiva",
+  "Salones de Belleza",
+  "SPA",
+  "Seguridad",
     "Tecnología y Desarrollo",
-    "Gimnasios",
-    "Papelería y Librerías",
-    "Mascotas",
-    "Odontología",
-    "Ópticas",
-    "Pastelerías",
-    "Pizzerías",
-    "Ropa de Niños",
-    "Ropa de Mujeres",
-    "Ropa Deportiva",
-    "Salones de Belleza",
-    "SPA",
-    "Talleres de Mecánica",
-    "Tiendas Deportivas",
-    "Veterinarias",
-    "Vidrierías",
+  "Tiendas Deportivas",
+  "Talleres de Mecánica",
+  "Veterinarias",
+  "Vidrierías"
   ]);
 });
 
@@ -137,6 +182,7 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
   try {
     const {
       nombreEstablecimiento,
+      ciudad,
       direccion,
       categoria,
       telefonoWhatsapp,
@@ -147,11 +193,12 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
 
     if (
       !nombreEstablecimiento ||
+      !ciudad ||
       !direccion ||
       !categoria ||
       !telefonoWhatsapp ||
       !descripcionVentas
-    ) {
+) {
       return res.status(400).json({ error: "Faltan campos obligatorios" });
     }
 
@@ -177,8 +224,9 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
       }
     }
 
-    const nuevaTienda = new Tienda({
+   const nuevaTienda = new Tienda({
       nombreEstablecimiento,
+      ciudad,
       direccion,
       categoria,
       telefonoWhatsapp: telefonoWhatsapp.replace(/\D/g, ""),
@@ -186,7 +234,7 @@ app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
       descripcionVentas,
       paginaWeb: paginaWeb || "",
       redesSociales: redesSociales || "",
-    });
+});
 
     const tiendaGuardada = await nuevaTienda.save();
     res.status(201).json({
@@ -243,6 +291,61 @@ app.get("/api/tiendas", async (req, res) => {
   }
 });
 
+// ciudad
+app.get("/api/tiendas/ciudad/:ciudad", async (req, res) => {
+  try {
+
+    const tiendas = await Tienda.find({
+      ciudad: req.params.ciudad,
+      activa: true,
+    }).sort({
+      nombreEstablecimiento: 1,
+    });
+
+    res.json(tiendas);
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: "Error interno del servidor",
+    });
+
+  }
+});
+
+app.get("/api/tiendas/ciudad/:ciudad/categoria/:categoria", async (req, res) => {
+
+    try{
+
+        const tiendas=await Tienda.find({
+
+            ciudad:req.params.ciudad,
+
+            categoria:req.params.categoria,
+
+            activa:true
+
+        }).sort({
+
+            nombreEstablecimiento:1
+
+        });
+
+        res.json(tiendas);
+
+    }catch(error){
+
+        console.error(error);
+
+        res.status(500).json({
+            error:"Error interno"
+        });
+
+    }
+
+});
 // Reseñas
 app.get("/api/tiendas/:id/reviews", async (req, res) => {
   try {

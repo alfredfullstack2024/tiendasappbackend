@@ -57,6 +57,7 @@ const tiendaSchema = new mongoose.Schema({
     "Chía",
     "Cajicá",
     "Cota",
+    "Chinchina",
   ],
 },
   direccion: { type: String, required: true, trim: true },

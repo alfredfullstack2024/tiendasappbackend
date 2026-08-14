@@ -4,6 +4,11 @@ const cors = require("cors");
 const helmet = require("helmet");
 const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
+const rateLimit = require("express-rate-limit");
+
 require("dotenv").config();
 
 const app = express();
@@ -27,19 +32,92 @@ app.use(helmet());
 
 app.use(
   cors({
-    origin: "*",
+    origin: process.env.FRONTEND_URL,
+    credentials: true,
   })
 );
 
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+app.use(cookieParser());
+
+app.use(
+  express.json({
+    limit: "2mb",
+  })
+);
+
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "2mb",
+  })
+);
+
+// =====================================================
+// SEGURIDAD
+// =====================================================
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    ok: false,
+    error:
+      "Demasiados intentos de acceso. Intenta nuevamente más tarde.",
+  },
+});
+
+// =====================================================
+// AUTENTICACIÓN DE AUTORIDADES
+// =====================================================
+
+const verificarAdministrador = (req, res, next) => {
+  try {
+    const token = req.cookies?.admin_token;
+
+    if (!token) {
+      return res.status(401).json({
+        ok: false,
+        error: "No autorizado",
+      });
+    }
+
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
+
+    if (
+      decoded.username !==
+      process.env.ADMIN_USERNAME
+    ) {
+      return res.status(403).json({
+        ok: false,
+        error: "Acceso denegado",
+      });
+    }
+
+    req.admin = {
+      username: decoded.username,
+      rol: "autoridad",
+    };
+
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      ok: false,
+      error: "Sesión inválida o expirada",
+    });
+  }
+};
 
 // =====================================================
 // MULTER
 // =====================================================
-// Solo una fotografía.
+// Una fotografía.
 // Máximo 5 MB.
-// Únicamente personas no localizadas.
+// Solo para personas no localizadas.
 
 const storage = multer.memoryStorage();
 
@@ -49,6 +127,7 @@ const upload = multer({
     fileSize: 5 * 1024 * 1024,
     files: 1,
   },
+
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith("image/")) {
       return cb(
@@ -76,7 +155,7 @@ mongoose
   });
 
 // =====================================================
-// MUNICIPIOS HABILITADOS
+// MUNICIPIOS
 // =====================================================
 
 const MUNICIPIOS = [
@@ -165,7 +244,7 @@ const TIPOS_REPORTE = [
 ];
 
 // =====================================================
-// SCHEMA REPORTE
+// SCHEMA
 // =====================================================
 
 const emergenciaSchema = new mongoose.Schema(
@@ -236,11 +315,6 @@ const emergenciaSchema = new mongoose.Schema(
       maxlength: 2000,
     },
 
-    // =================================================
-    // FOTO
-    // SOLO PARA PERSONA NO LOCALIZADA
-    // =================================================
-
     foto: {
       url: {
         type: String,
@@ -253,10 +327,6 @@ const emergenciaSchema = new mongoose.Schema(
       },
     },
 
-    // =================================================
-    // UBICACIÓN PARA MAPA
-    // =================================================
-
     latitud: {
       type: Number,
       default: null,
@@ -266,10 +336,6 @@ const emergenciaSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
-
-    // =================================================
-    // CONTROL
-    // =================================================
 
     activa: {
       type: Boolean,
@@ -281,6 +347,7 @@ const emergenciaSchema = new mongoose.Schema(
       default: Date.now,
     },
   },
+
   {
     timestamps: true,
   }
@@ -360,48 +427,207 @@ const subirFotoEmergencia = async (
 };
 
 // =====================================================
-// HEALTH CHECK
+// HEALTH
 // =====================================================
 
 app.get("/health", (req, res) => {
   res.json({
     status: "OK",
-    servicio: "Sistema de Ayuda Ciudadana",
+    servicio:
+      "Sistema de Ayuda Ciudadana",
     fecha: new Date().toISOString(),
   });
 });
 
 // =====================================================
+// LOGIN AUTORIDADES
+// =====================================================
+
+app.post(
+  "/api/admin/login",
+  loginLimiter,
+  async (req, res) => {
+    try {
+      const {
+        username,
+        password,
+      } = req.body;
+
+      if (!username || !password) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Usuario y contraseña son obligatorios",
+        });
+      }
+
+      if (
+        !process.env.ADMIN_USERNAME ||
+        !process.env.ADMIN_PASSWORD_HASH ||
+        !process.env.JWT_SECRET
+      ) {
+        console.error(
+          "❌ Faltan variables de seguridad en Render"
+        );
+
+        return res.status(500).json({
+          ok: false,
+          error:
+            "El sistema de autenticación no está configurado",
+        });
+      }
+
+      if (
+        username !==
+        process.env.ADMIN_USERNAME
+      ) {
+        return res.status(401).json({
+          ok: false,
+          error:
+            "Credenciales incorrectas",
+        });
+      }
+
+      const passwordCorrecta =
+        await bcrypt.compare(
+          password,
+          process.env.ADMIN_PASSWORD_HASH
+        );
+
+      if (!passwordCorrecta) {
+        return res.status(401).json({
+          ok: false,
+          error:
+            "Credenciales incorrectas",
+        });
+      }
+
+      const token = jwt.sign(
+        {
+          username,
+          rol: "autoridad",
+        },
+
+        process.env.JWT_SECRET,
+
+        {
+          expiresIn: "8h",
+        }
+      );
+
+      res.cookie(
+        "admin_token",
+        token,
+        {
+          httpOnly: true,
+          secure: true,
+          sameSite: "none",
+          maxAge:
+            8 * 60 * 60 * 1000,
+        }
+      );
+
+      return res.json({
+        ok: true,
+        mensaje:
+          "Acceso autorizado",
+      });
+    } catch (error) {
+      console.error(
+        "❌ ERROR LOGIN:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Error interno del servidor",
+      });
+    }
+  }
+);
+
+// =====================================================
+// VERIFICAR SESIÓN
+// =====================================================
+
+app.get(
+  "/api/admin/me",
+  verificarAdministrador,
+  (req, res) => {
+    res.json({
+      ok: true,
+      usuario:
+        req.admin.username,
+      rol: req.admin.rol,
+    });
+  }
+);
+
+// =====================================================
+// CERRAR SESIÓN
+// =====================================================
+
+app.post(
+  "/api/admin/logout",
+  (req, res) => {
+    res.clearCookie(
+      "admin_token",
+      {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+      }
+    );
+
+    res.json({
+      ok: true,
+      mensaje:
+        "Sesión cerrada",
+    });
+  }
+);
+
+// =====================================================
 // MUNICIPIOS
 // =====================================================
 
-app.get("/api/municipios", (req, res) => {
-  res.json(MUNICIPIOS);
-});
+app.get(
+  "/api/municipios",
+  (req, res) => {
+    res.json(MUNICIPIOS);
+  }
+);
 
 // =====================================================
 // DEPARTAMENTOS
 // =====================================================
 
-app.get("/api/departamentos", (req, res) => {
-  const departamentos = [
-    ...new Set(
-      Object.values(
-        DEPARTAMENTO_POR_MUNICIPIO
-      )
-    ),
-  ].sort();
+app.get(
+  "/api/departamentos",
+  (req, res) => {
+    const departamentos = [
+      ...new Set(
+        Object.values(
+          DEPARTAMENTO_POR_MUNICIPIO
+        )
+      ),
+    ].sort();
 
-  res.json(departamentos);
-});
+    res.json(departamentos);
+  }
+);
 
 // =====================================================
 // TIPOS DE REPORTE
 // =====================================================
 
-app.get("/api/tipos-reporte", (req, res) => {
-  res.json(TIPOS_REPORTE);
-});
+app.get(
+  "/api/tipos-reporte",
+  (req, res) => {
+    res.json(TIPOS_REPORTE);
+  }
+);
 
 // =====================================================
 // CREAR REPORTE
@@ -426,32 +652,36 @@ app.post(
         longitud,
       } = req.body;
 
-      // =================================================
-      // VALIDACIONES
-      // =================================================
-
       if (!nombre || !nombre.trim()) {
         return res.status(400).json({
-          error: "El nombre es obligatorio",
+          error:
+            "El nombre es obligatorio",
         });
       }
 
       if (!ciudad) {
         return res.status(400).json({
-          error: "La ciudad es obligatoria",
+          error:
+            "La ciudad es obligatoria",
         });
       }
 
-      if (!MUNICIPIOS.includes(ciudad)) {
+      if (
+        !MUNICIPIOS.includes(ciudad)
+      ) {
         return res.status(400).json({
           error:
             "El municipio seleccionado no está habilitado",
         });
       }
 
-      if (!direccion || !direccion.trim()) {
+      if (
+        !direccion ||
+        !direccion.trim()
+      ) {
         return res.status(400).json({
-          error: "La dirección es obligatoria",
+          error:
+            "La dirección es obligatoria",
         });
       }
 
@@ -462,9 +692,14 @@ app.post(
         });
       }
 
-      if (!TIPOS_REPORTE.includes(tipoReporte)) {
+      if (
+        !TIPOS_REPORTE.includes(
+          tipoReporte
+        )
+      ) {
         return res.status(400).json({
-          error: "Tipo de reporte inválido",
+          error:
+            "Tipo de reporte inválido",
         });
       }
 
@@ -478,16 +713,17 @@ app.post(
         });
       }
 
-      if (!descripcion || !descripcion.trim()) {
+      if (
+        !descripcion ||
+        !descripcion.trim()
+      ) {
         return res.status(400).json({
           error:
             "La descripción es obligatoria",
         });
       }
 
-      // =================================================
-      // FOTO
-      // =================================================
+      // FOTO SOLO PARA NO LOCALIZADOS
 
       if (
         tipoReporte ===
@@ -511,17 +747,18 @@ app.post(
         });
       }
 
-      // =================================================
       // NECESIDADES
-      // =================================================
 
       let necesidadesArray = [];
 
       if (necesidades) {
         try {
           necesidadesArray =
-            typeof necesidades === "string"
-              ? JSON.parse(necesidades)
+            typeof necesidades ===
+            "string"
+              ? JSON.parse(
+                  necesidades
+                )
               : necesidades;
 
           if (
@@ -536,22 +773,15 @@ app.post(
         }
       }
 
-      // =================================================
-      // DEPARTAMENTO AUTOMÁTICO
-      // =================================================
-
       const departamento =
         DEPARTAMENTO_POR_MUNICIPIO[
           ciudad
         ] || "";
 
-      // =================================================
-      // CREAR REPORTE
-      // =================================================
-
       const nuevoReporte =
         new Emergencia({
-          nombre: nombre.trim(),
+          nombre:
+            nombre.trim(),
 
           ciudad,
 
@@ -596,9 +826,7 @@ app.post(
       const reporteGuardado =
         await nuevoReporte.save();
 
-      // =================================================
-      // SUBIR FOTO
-      // =================================================
+      // FOTO
 
       if (
         tipoReporte ===
@@ -621,14 +849,9 @@ app.post(
           };
 
           await reporteGuardado.save();
-
-          console.log(
-            "📸 Foto guardada:",
-            reporteGuardado._id.toString()
-          );
         } catch (error) {
           console.error(
-            "❌ Error Cloudinary:",
+            "❌ ERROR CLOUDINARY:",
             error
           );
 
@@ -644,38 +867,13 @@ app.post(
       }
 
       console.log(
-        "================================="
-      );
-
-      console.log(
-        "🚨 NUEVO REPORTE"
-      );
-
-      console.log(
-        "ID:",
-        reporteGuardado._id.toString()
-      );
-
-      console.log(
-        "Departamento:",
-        reporteGuardado.departamento
-      );
-
-      console.log(
-        "Ciudad:",
-        reporteGuardado.ciudad
-      );
-
-      console.log(
-        "Tipo:",
+        "🚨 NUEVO REPORTE:",
+        reporteGuardado._id.toString(),
+        reporteGuardado.ciudad,
         reporteGuardado.tipoReporte
       );
 
-      console.log(
-        "================================="
-      );
-
-      res.status(201).json({
+      return res.status(201).json({
         ok: true,
 
         mensaje:
@@ -704,9 +902,8 @@ app.post(
         error
       );
 
-      res.status(500).json({
+      return res.status(500).json({
         ok: false,
-
         error:
           "Error interno del servidor",
       });
@@ -715,241 +912,143 @@ app.post(
 );
 
 // =====================================================
-// CONSULTAR REPORTES
+// PÚBLICO: PERSONAS NO LOCALIZADAS
 // =====================================================
-//
-// Esta ruta sigue funcionando para las páginas
-// de personas no localizadas y personas a salvo.
-//
-// =====================================================
+// IMPORTANTE:
+// Solo mostramos información necesaria para ayudar.
+// NO mostramos teléfono ni dirección.
 
 app.get(
-  "/api/emergencias",
+  "/api/public/desaparecidos",
   async (req, res) => {
     try {
       const filtro = {
         activa: true,
+
+        tipoReporte:
+          "Persona no localizada",
       };
 
       if (req.query.ciudad) {
+        if (
+          !MUNICIPIOS.includes(
+            req.query.ciudad
+          )
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Municipio inválido",
+          });
+        }
+
         filtro.ciudad =
           req.query.ciudad;
       }
 
-      if (req.query.tipoReporte) {
-        filtro.tipoReporte =
-          req.query.tipoReporte;
-      }
-
       const reportes =
-        await Emergencia
-          .find(filtro)
+        await Emergencia.find(filtro)
+          .select(
+            "_id nombre ciudad departamento tipoReporte descripcion foto fechaCreacion activa"
+          )
           .sort({
             fechaCreacion: -1,
           });
 
-      res.json({
+      return res.json({
         ok: true,
-
         total:
           reportes.length,
-
         reportes,
       });
     } catch (error) {
       console.error(
-        "❌ ERROR CONSULTANDO REPORTES:",
+        "❌ ERROR DESAPARECIDOS:",
         error
       );
 
-      res.status(500).json({
+      return res.status(500).json({
         ok: false,
-
         error:
-          "Error consultando los reportes",
+          "Error consultando personas no localizadas",
       });
     }
   }
 );
 
 // =====================================================
-// OBTENER UN REPORTE
+// PÚBLICO: PERSONAS A SALVO
 // =====================================================
 
 app.get(
-  "/api/emergencias/:id",
+  "/api/public/salvos",
   async (req, res) => {
     try {
-      if (
-        !mongoose.Types.ObjectId.isValid(
-          req.params.id
-        )
-      ) {
-        return res.status(400).json({
-          error: "ID inválido",
-        });
+      const filtro = {
+        activa: true,
+
+        tipoReporte:
+          "Estoy a salvo",
+      };
+
+      if (req.query.ciudad) {
+        if (
+          !MUNICIPIOS.includes(
+            req.query.ciudad
+          )
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Municipio inválido",
+          });
+        }
+
+        filtro.ciudad =
+          req.query.ciudad;
       }
 
-      const reporte =
-        await Emergencia.findById(
-          req.params.id
-        );
+      const reportes =
+        await Emergencia.find(filtro)
+          .select(
+            "_id nombre ciudad departamento tipoReporte descripcion fechaCreacion activa"
+          )
+          .sort({
+            fechaCreacion: -1,
+          });
 
-      if (!reporte) {
-        return res.status(404).json({
-          error:
-            "Reporte no encontrado",
-        });
-      }
-
-      res.json({
+      return res.json({
         ok: true,
-        reporte,
-      });
-    } catch (error) {
-      console.error(error);
-
-      res.status(500).json({
-        error:
-          "Error obteniendo reporte",
-      });
-    }
-  }
-);
-
-// =====================================================
-// ESTADÍSTICAS RESUMEN
-// =====================================================
-
-app.get(
-  "/api/emergencias/estadisticas/resumen",
-  async (req, res) => {
-    try {
-      const [
-        total,
-        porCiudad,
-        porTipo,
-        personas,
-      ] = await Promise.all([
-        Emergencia.countDocuments({
-          activa: true,
-        }),
-
-        Emergencia.aggregate([
-          {
-            $match: {
-              activa: true,
-            },
-          },
-
-          {
-            $group: {
-              _id: "$ciudad",
-
-              cantidad: {
-                $sum: 1,
-              },
-            },
-          },
-
-          {
-            $sort: {
-              cantidad: -1,
-            },
-          },
-        ]),
-
-        Emergencia.aggregate([
-          {
-            $match: {
-              activa: true,
-            },
-          },
-
-          {
-            $group: {
-              _id: "$tipoReporte",
-
-              cantidad: {
-                $sum: 1,
-              },
-            },
-          },
-
-          {
-            $sort: {
-              cantidad: -1,
-            },
-          },
-        ]),
-
-        Emergencia.aggregate([
-          {
-            $match: {
-              activa: true,
-            },
-          },
-
-          {
-            $group: {
-              _id: null,
-
-              personas: {
-                $sum:
-                  "$personasAfectadas",
-              },
-            },
-          },
-        ]),
-      ]);
-
-      res.json({
-        ok: true,
-
-        totalReportes: total,
-
-        personasAfectadas:
-          personas.length > 0
-            ? personas[0].personas
-            : 0,
-
-        porCiudad,
-
-        porTipo,
+        total:
+          reportes.length,
+        reportes,
       });
     } catch (error) {
       console.error(
-        "❌ ERROR ESTADÍSTICAS:",
+        "❌ ERROR SALVOS:",
         error
       );
 
-      res.status(500).json({
+      return res.status(500).json({
+        ok: false,
         error:
-          "Error obteniendo estadísticas",
+          "Error consultando personas a salvo",
       });
     }
   }
 );
 
 // =====================================================
-// DASHBOARD PROFESIONAL
+// DASHBOARD DE AUTORIDADES
 // =====================================================
+// 🔐 PROTEGIDO
 //
-// IMPORTANTE:
-//
-// Este endpoint devuelve información agregada.
-// NO devuelve:
-//
-// - nombres
-// - teléfonos
-// - direcciones
-// - fotografías
-//
-// Es la fuente de datos del dashboard.
-// =====================================================
+// No contiene nombres, teléfonos,
+// direcciones ni fotografías.
 
 app.get(
   "/api/reportes/dashboard",
+  verificarAdministrador,
   async (req, res) => {
     try {
       const {
@@ -960,20 +1059,16 @@ app.get(
         fechaFin,
       } = req.query;
 
-      // =================================================
-      // MATCH BASE
-      // =================================================
-
       const match = {
         activa: true,
       };
 
-      // =================================================
-      // FILTRO CIUDAD
-      // =================================================
+      // CIUDAD
 
       if (ciudad) {
-        if (!MUNICIPIOS.includes(ciudad)) {
+        if (
+          !MUNICIPIOS.includes(ciudad)
+        ) {
           return res.status(400).json({
             ok: false,
             error:
@@ -984,9 +1079,7 @@ app.get(
         match.ciudad = ciudad;
       }
 
-      // =================================================
-      // FILTRO TIPO
-      // =================================================
+      // TIPO
 
       if (tipoReporte) {
         if (
@@ -1005,16 +1098,16 @@ app.get(
           tipoReporte;
       }
 
-      // =================================================
-      // FILTRO FECHA INICIO
-      // =================================================
+      // FECHA INICIO
 
       if (fechaInicio) {
         const inicio = new Date(
           `${fechaInicio}T00:00:00`
         );
 
-        if (isNaN(inicio.getTime())) {
+        if (
+          isNaN(inicio.getTime())
+        ) {
           return res.status(400).json({
             ok: false,
             error:
@@ -1023,22 +1116,20 @@ app.get(
         }
 
         match.fechaCreacion = {
-          ...(match.fechaCreacion ||
-            {}),
           $gte: inicio,
         };
       }
 
-      // =================================================
-      // FILTRO FECHA FIN
-      // =================================================
+      // FECHA FIN
 
       if (fechaFin) {
         const fin = new Date(
           `${fechaFin}T23:59:59.999`
         );
 
-        if (isNaN(fin.getTime())) {
+        if (
+          isNaN(fin.getTime())
+        ) {
           return res.status(400).json({
             ok: false,
             error:
@@ -1053,15 +1144,7 @@ app.get(
         };
       }
 
-      // =================================================
-      // PIPELINE BASE
-      // =================================================
-      //
-      // Usamos el campo departamento si existe.
-      //
-      // Para registros antiguos que no tengan
-      // departamento, lo calculamos usando ciudad.
-      //
+      // PIPELINE
 
       const pipelineBase = [
         {
@@ -1124,10 +1207,6 @@ app.get(
         },
       ];
 
-      // =================================================
-      // FILTRO DEPARTAMENTO
-      // =================================================
-
       if (departamento) {
         pipelineBase.push({
           $match: {
@@ -1151,9 +1230,7 @@ app.get(
         evolucion,
         ubicaciones,
       ] = await Promise.all([
-        // =================================================
         // RESUMEN
-        // =================================================
 
         Emergencia.aggregate([
           ...pipelineBase,
@@ -1180,9 +1257,7 @@ app.get(
                         "Estoy a salvo",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1197,9 +1272,7 @@ app.get(
                         "Persona no localizada",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1214,9 +1287,7 @@ app.get(
                         "Daños en mi vivienda",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1231,9 +1302,7 @@ app.get(
                         "Necesito ayuda",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1248,9 +1317,7 @@ app.get(
                         "Quiero ofrecer ayuda",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1259,9 +1326,7 @@ app.get(
           },
         ]),
 
-        // =================================================
         // DEPARTAMENTOS
-        // =================================================
 
         Emergencia.aggregate([
           ...pipelineBase,
@@ -1289,9 +1354,7 @@ app.get(
                         "Persona no localizada",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1306,9 +1369,7 @@ app.get(
                         "Estoy a salvo",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1323,9 +1384,7 @@ app.get(
                         "Necesito ayuda",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1340,9 +1399,7 @@ app.get(
                         "Daños en mi vivienda",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1357,9 +1414,7 @@ app.get(
           },
         ]),
 
-        // =================================================
-        // MUNICIPIOS
-        // =================================================
+        // CIUDADES
 
         Emergencia.aggregate([
           ...pipelineBase,
@@ -1391,9 +1446,7 @@ app.get(
                         "Persona no localizada",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1408,9 +1461,7 @@ app.get(
                         "Estoy a salvo",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1425,9 +1476,7 @@ app.get(
                         "Necesito ayuda",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1442,9 +1491,7 @@ app.get(
                         "Daños en mi vivienda",
                       ],
                     },
-
                     1,
-
                     0,
                   ],
                 },
@@ -1459,9 +1506,7 @@ app.get(
           },
         ]),
 
-        // =================================================
-        // TIPOS DE REPORTE
-        // =================================================
+        // TIPOS
 
         Emergencia.aggregate([
           ...pipelineBase,
@@ -1488,9 +1533,7 @@ app.get(
           },
         ]),
 
-        // =================================================
         // NECESIDADES
-        // =================================================
 
         Emergencia.aggregate([
           ...pipelineBase,
@@ -1520,9 +1563,7 @@ app.get(
           },
         ]),
 
-        // =================================================
-        // ESTADO DE VIVIENDA
-        // =================================================
+        // VIVIENDAS
 
         Emergencia.aggregate([
           ...pipelineBase,
@@ -1556,9 +1597,7 @@ app.get(
           },
         ]),
 
-        // =================================================
-        // EVOLUCIÓN DIARIA
-        // =================================================
+        // EVOLUCIÓN
 
         Emergencia.aggregate([
           ...pipelineBase,
@@ -1569,7 +1608,6 @@ app.get(
                 $dateToString: {
                   format:
                     "%Y-%m-%d",
-
                   date:
                     "$fechaCreacion",
                 },
@@ -1593,15 +1631,7 @@ app.get(
           },
         ]),
 
-        // =================================================
-        // DATOS PARA MAPA
-        // =================================================
-        //
-        // SOLO registros que realmente tengan
-        // coordenadas.
-        //
-        // No devolvemos información personal.
-        //
+        // MAPA
 
         Emergencia.aggregate([
           ...pipelineBase,
@@ -1640,32 +1670,23 @@ app.get(
       ]);
 
       // =================================================
-      // RESUMEN POR DEFECTO
+      // RESUMEN
       // =================================================
 
       const datosResumen =
         resumen[0] || {
           totalReportes: 0,
-
           personasAfectadas: 0,
-
           personasASalvo: 0,
-
           personasNoLocalizadas: 0,
-
           viviendasAfectadas: 0,
-
           personasNecesitanAyuda: 0,
-
           personasOfrecenAyuda: 0,
         };
 
-      // =================================================
-      // PORCENTAJES
-      // =================================================
-
       const totalReportes =
-        datosResumen.totalReportes || 0;
+        datosResumen.totalReportes ||
+        0;
 
       const calcularPorcentaje = (
         valor
@@ -1676,7 +1697,8 @@ app.get(
 
         return Number(
           (
-            (valor / totalReportes) *
+            (valor /
+              totalReportes) *
             100
           ).toFixed(1)
         );
@@ -1735,38 +1757,30 @@ app.get(
       const alertas = [];
 
       if (
-        datosResumen
-          .personasNoLocalizadas > 0
+        datosResumen.personasNoLocalizadas >
+        0
       ) {
         alertas.push({
           nivel: "critico",
-
           tipo:
             "Personas no localizadas",
-
           cantidad:
-            datosResumen
-              .personasNoLocalizadas,
-
+            datosResumen.personasNoLocalizadas,
           mensaje:
             "Existen personas reportadas como no localizadas.",
         });
       }
 
       if (
-        datosResumen
-          .personasNecesitanAyuda > 0
+        datosResumen.personasNecesitanAyuda >
+        0
       ) {
         alertas.push({
           nivel: "alto",
-
           tipo:
             "Personas que necesitan ayuda",
-
           cantidad:
-            datosResumen
-              .personasNecesitanAyuda,
-
+            datosResumen.personasNecesitanAyuda,
           mensaje:
             "Existen reportes activos de personas que solicitan ayuda.",
         });
@@ -1775,16 +1789,12 @@ app.get(
       if (necesidadPrioritaria) {
         alertas.push({
           nivel: "medio",
-
           tipo:
             "Necesidad prioritaria",
-
           cantidad:
             necesidadPrioritaria.cantidad,
-
           necesidad:
             necesidadPrioritaria._id,
-
           mensaje:
             `La necesidad más reportada actualmente es ${necesidadPrioritaria._id}.`,
         });
@@ -1792,25 +1802,18 @@ app.get(
 
       if (municipioMasReportado) {
         alertas.push({
-          nivel: "informativo",
-
+          nivel:
+            "informativo",
           tipo:
             "Mayor concentración",
-
           cantidad:
             municipioMasReportado.reportes,
-
           municipio:
             municipioMasReportado._id,
-
           mensaje:
             `${municipioMasReportado._id} concentra actualmente la mayor cantidad de reportes.`,
         });
       }
-
-      // =================================================
-      // MUNICIPIOS CON PERSONAS NO LOCALIZADAS
-      // =================================================
 
       const municipiosNoLocalizados =
         porCiudad.filter(
@@ -1818,15 +1821,12 @@ app.get(
             item.noLocalizadas > 0
         );
 
-      // =================================================
-      // MUNICIPIOS CON MAYOR NECESIDAD
-      // =================================================
-
       const municipiosNecesitanAyuda =
         porCiudad
           .filter(
             (item) =>
-              item.necesitanAyuda > 0
+              item.necesitanAyuda >
+              0
           )
           .sort(
             (a, b) =>
@@ -1835,10 +1835,10 @@ app.get(
           );
 
       // =================================================
-      // RESPUESTA
+      // RESPUESTA DASHBOARD
       // =================================================
 
-      res.json({
+      return res.json({
         ok: true,
 
         generadoEn:
@@ -1846,13 +1846,15 @@ app.get(
 
         filtros: {
           departamento:
-            departamento || "Todos",
+            departamento ||
+            "Todos",
 
           ciudad:
             ciudad || "Todos",
 
           tipoReporte:
-            tipoReporte || "Todos",
+            tipoReporte ||
+            "Todos",
 
           fechaInicio:
             fechaInicio || null,
@@ -1873,6 +1875,8 @@ app.get(
           municipiosNoLocalizados,
 
           municipiosNecesitanAyuda,
+
+          alertas,
         },
 
         porDepartamento,
@@ -1895,17 +1899,402 @@ app.get(
         error
       );
 
-      res.status(500).json({
+      return res.status(500).json({
         ok: false,
-
         error:
           "Error generando el dashboard",
+      });
+    }
+  }
+);
 
-        detalle:
-          process.env.NODE_ENV ===
-          "development"
-            ? error.message
-            : undefined,
+// =====================================================
+// BASE DE DATOS PRIVADA PARA AUTORIDADES
+// =====================================================
+// 🔐 AQUÍ SÍ ESTÁ TODA LA INFORMACIÓN.
+//
+// Esta ruta NO se puede consultar sin login.
+//
+// Permite:
+// - búsqueda
+// - ciudad
+// - departamento
+// - tipo
+// - fechas
+// - paginación
+//
+// La información completa solo sale después
+// de autenticar la sesión.
+// =====================================================
+
+app.get(
+  "/api/reportes/detallados",
+  verificarAdministrador,
+  async (req, res) => {
+    try {
+      const {
+        pagina = 1,
+        limite = 50,
+        buscar,
+        ciudad,
+        departamento,
+        tipoReporte,
+        activa,
+        fechaInicio,
+        fechaFin,
+      } = req.query;
+
+      const paginaNumero = Math.max(
+        parseInt(pagina, 10) || 1,
+        1
+      );
+
+      const limiteNumero = Math.min(
+        Math.max(
+          parseInt(limite, 10) || 50,
+          1
+        ),
+        100
+      );
+
+      const filtro = {};
+
+      // CIUDAD
+
+      if (ciudad) {
+        if (
+          !MUNICIPIOS.includes(ciudad)
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Municipio inválido",
+          });
+        }
+
+        filtro.ciudad = ciudad;
+      }
+
+      // DEPARTAMENTO
+
+      if (departamento) {
+        filtro.departamento =
+          departamento;
+      }
+
+      // TIPO
+
+      if (tipoReporte) {
+        if (
+          !TIPOS_REPORTE.includes(
+            tipoReporte
+          )
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Tipo de reporte inválido",
+          });
+        }
+
+        filtro.tipoReporte =
+          tipoReporte;
+      }
+
+      // ACTIVA
+
+      if (activa !== undefined) {
+        filtro.activa =
+          activa === "true";
+      }
+
+      // FECHAS
+
+      if (
+        fechaInicio ||
+        fechaFin
+      ) {
+        filtro.fechaCreacion = {};
+
+        if (fechaInicio) {
+          const inicio = new Date(
+            `${fechaInicio}T00:00:00`
+          );
+
+          if (
+            isNaN(inicio.getTime())
+          ) {
+            return res.status(
+              400
+            ).json({
+              ok: false,
+              error:
+                "fechaInicio inválida",
+            });
+          }
+
+          filtro.fechaCreacion.$gte =
+            inicio;
+        }
+
+        if (fechaFin) {
+          const fin = new Date(
+            `${fechaFin}T23:59:59.999`
+          );
+
+          if (
+            isNaN(fin.getTime())
+          ) {
+            return res.status(
+              400
+            ).json({
+              ok: false,
+              error:
+                "fechaFin inválida",
+            });
+          }
+
+          filtro.fechaCreacion.$lte =
+            fin;
+        }
+      }
+
+      // BÚSQUEDA
+
+      if (
+        buscar &&
+        buscar.trim()
+      ) {
+        const termino =
+          buscar.trim();
+
+        filtro.$or = [
+          {
+            nombre: {
+              $regex:
+                termino,
+              $options: "i",
+            },
+          },
+
+          {
+            telefonoWhatsapp: {
+              $regex:
+                termino,
+              $options: "i",
+            },
+          },
+
+          {
+            direccion: {
+              $regex:
+                termino,
+              $options: "i",
+            },
+          },
+
+          {
+            descripcion: {
+              $regex:
+                termino,
+              $options: "i",
+            },
+          },
+        ];
+      }
+
+      const skip =
+        (paginaNumero - 1) *
+        limiteNumero;
+
+      const [
+        total,
+        reportes,
+      ] = await Promise.all([
+        Emergencia.countDocuments(
+          filtro
+        ),
+
+        Emergencia.find(filtro)
+          .sort({
+            fechaCreacion: -1,
+          })
+          .skip(skip)
+          .limit(limiteNumero)
+          .lean(),
+      ]);
+
+      const totalPaginas =
+        Math.ceil(
+          total / limiteNumero
+        );
+
+      return res.json({
+        ok: true,
+
+        pagina: paginaNumero,
+
+        limite: limiteNumero,
+
+        total,
+
+        totalPaginas,
+
+        reportes,
+      });
+    } catch (error) {
+      console.error(
+        "❌ ERROR REPORTES DETALLADOS:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Error consultando la información privada",
+      });
+    }
+  }
+);
+
+// =====================================================
+// REPORTE INDIVIDUAL PRIVADO
+// =====================================================
+// 🔐 Información completa de un reporte.
+
+app.get(
+  "/api/reportes/detallados/:id",
+  verificarAdministrador,
+  async (req, res) => {
+    try {
+      if (
+        !mongoose.Types.ObjectId.isValid(
+          req.params.id
+        )
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido",
+        });
+      }
+
+      const reporte =
+        await Emergencia.findById(
+          req.params.id
+        ).lean();
+
+      if (!reporte) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Reporte no encontrado",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        reporte,
+      });
+    } catch (error) {
+      console.error(
+        "❌ ERROR REPORTE PRIVADO:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Error obteniendo el reporte",
+      });
+    }
+  }
+);
+
+// =====================================================
+// MARCAR REPORTE COMO INACTIVO
+// =====================================================
+// 🔐 Solo autoridades.
+//
+// Esto permite cerrar un caso,
+// por ejemplo cuando una persona
+// ya fue localizada.
+//
+// =====================================================
+
+app.patch(
+  "/api/reportes/detallados/:id/estado",
+  verificarAdministrador,
+  async (req, res) => {
+    try {
+      if (
+        !mongoose.Types.ObjectId.isValid(
+          req.params.id
+        )
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido",
+        });
+      }
+
+      const {
+        activa,
+      } = req.body;
+
+      if (
+        typeof activa !==
+        "boolean"
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "El campo activa debe ser booleano",
+        });
+      }
+
+      const reporte =
+        await Emergencia.findByIdAndUpdate(
+          req.params.id,
+
+          {
+            $set: {
+              activa,
+            },
+          },
+
+          {
+            new: true,
+          }
+        ).lean();
+
+      if (!reporte) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Reporte no encontrado",
+        });
+      }
+
+      return res.json({
+        ok: true,
+
+        mensaje:
+          activa
+            ? "Reporte activado"
+            : "Reporte cerrado",
+
+        reporte,
+      });
+    } catch (error) {
+      console.error(
+        "❌ ERROR ACTUALIZANDO ESTADO:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Error actualizando el reporte",
       });
     }
   }
@@ -1915,19 +2304,27 @@ app.get(
 // 404
 // =====================================================
 
-app.use((req, res) => {
-  res.status(404).json({
-    error:
-      "Ruta no encontrada",
-  });
-});
+app.use(
+  (req, res) => {
+    res.status(404).json({
+      ok: false,
+      error:
+        "Ruta no encontrada",
+    });
+  }
+);
 
 // =====================================================
 // ERRORES MULTER
 // =====================================================
 
 app.use(
-  (error, req, res, next) => {
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
     if (
       error instanceof
       multer.MulterError
@@ -1937,6 +2334,7 @@ app.use(
         "LIMIT_FILE_SIZE"
       ) {
         return res.status(400).json({
+          ok: false,
           error:
             "La fotografía no puede superar los 5 MB",
         });
@@ -1947,12 +2345,14 @@ app.use(
         "LIMIT_FILE_COUNT"
       ) {
         return res.status(400).json({
+          ok: false,
           error:
             "Solo se permite una fotografía",
         });
       }
 
       return res.status(400).json({
+        ok: false,
         error:
           "Error procesando la fotografía",
       });
@@ -1965,6 +2365,7 @@ app.use(
       );
 
       return res.status(400).json({
+        ok: false,
         error:
           error.message ||
           "Error procesando la solicitud",
@@ -1976,43 +2377,58 @@ app.use(
 );
 
 // =====================================================
-// INICIAR SERVIDOR
+// SERVIDOR
 // =====================================================
 
-app.listen(PORT, () => {
-  console.log("");
+app.listen(
+  PORT,
+  () => {
+    console.log("");
 
-  console.log(
-    "🇨🇴 ================================="
-  );
+    console.log(
+      "🇨🇴 ================================="
+    );
 
-  console.log(
-    "🇨🇴 SISTEMA DE AYUDA CIUDADANA"
-  );
+    console.log(
+      "🇨🇴 SISTEMA DE AYUDA CIUDADANA"
+    );
 
-  console.log(
-    "🇨🇴 ================================="
-  );
+    console.log(
+      "🇨🇴 ================================="
+    );
 
-  console.log(
-    `🚀 Puerto: ${PORT}`
-  );
+    console.log(
+      `🚀 Puerto: ${PORT}`
+    );
 
-  console.log(
-    "❤️ Health: /health"
-  );
+    console.log(
+      "❤️ Health: /health"
+    );
 
-  console.log(
-    "🚨 Reportes: /api/emergencias"
-  );
+    console.log(
+      "📝 Crear reporte: /api/emergencias"
+    );
 
-  console.log(
-    "📊 Estadísticas: /api/emergencias/estadisticas/resumen"
-  );
+    console.log(
+      "👤 Público desaparecidos: /api/public/desaparecidos"
+    );
 
-  console.log(
-    "📈 Dashboard: /api/reportes/dashboard"
-  );
+    console.log(
+      "❤️ Público salvos: /api/public/salvos"
+    );
 
-  console.log("");
-});
+    console.log(
+      "🔐 Login autoridades: /api/admin/login"
+    );
+
+    console.log(
+      "📊 Dashboard privado: /api/reportes/dashboard"
+    );
+
+    console.log(
+      "🗄️ Base privada: /api/reportes/detallados"
+    );
+
+    console.log("");
+  }
+);

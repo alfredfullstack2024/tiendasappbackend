@@ -440,6 +440,22 @@ app.get("/health", (req, res) => {
 });
 
 // =====================================================
+// GENERAR HASH BCRYPT - TEMPORAL
+// ELIMINAR DESPUÉS DE USAR
+// =====================================================
+
+app.get("/api/generar-hash-temporal", (req, res) => {
+  const hash = bcrypt.hashSync(
+    "EmergenciaColombia2026!",
+    10
+  );
+
+  return res.json({
+    ok: true,
+    hash,
+  });
+});
+// =====================================================
 // LOGIN AUTORIDADES
 // =====================================================
 

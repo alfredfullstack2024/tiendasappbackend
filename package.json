@@ -1,24 +1,24 @@
 {
   "name": "tiendasapp-backend",
   "version": "1.0.0",
-  "description": "Backend para directorio de tiendas",
+  "description": "Backend para sistema de ayuda ciudadana",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "cloudinary": "^1.41.3",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.0.1",
     "helmet": "^7.2.0",
+    "jsonwebtoken": "^9.0.2",
     "mongoose": "^7.8.7",
     "multer": "^1.4.5-lts.1"
-    "bcryptjs": "^2.4.3",
-"jsonwebtoken": "^9.0.2",
-"cookie-parser": "^1.4.7",
-"express-rate-limit": "^8.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

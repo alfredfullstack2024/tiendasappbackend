@@ -9,409 +9,966 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// =================== CONFIGURACIÓN CLOUDINARY ===================
+// =====================================================
+// CONFIGURACIÓN
+// =====================================================
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// =================== MIDDLEWARE ===================
-app.use(helmet());
-app.use(cors());
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+// =====================================================
+// MIDDLEWARE
+// =====================================================
 
-// =================== MULTER ===================
+app.use(helmet());
+
+app.use(
+  cors({
+    origin: "*",
+  })
+);
+
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+
+// =====================================================
+// MULTER
+// =====================================================
+// Una sola fotografía y máximo 5 MB
+
 const storage = multer.memoryStorage();
+
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // Máx 5MB
-});
-
-// =================== CONEXIÓN MONGO ===================
-mongoose
-  .connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("✅ Conectado a MongoDB"))
-  .catch((err) => console.error("❌ Error conectando a MongoDB:", err));
-
-// =================== SCHEMAS ===================
-const reseñaSchema = new mongoose.Schema({
-  usuario: { type: String, required: true, trim: true },
-  comentario: { type: String, trim: true },
-  calificacion: { type: Number, required: true, min: 1, max: 5 },
-  fecha: { type: Date, default: Date.now },
-});
-
-const tiendaSchema = new mongoose.Schema({
-  nombreEstablecimiento: { type: String, required: true, trim: true },
-  ciudad: {
-  type: String,
-  required: true,
-  trim: true,
-  enum: [
-    "Zipaquirá",
-    "Chía",
-    "Cajicá",
-    "Cota",
-    "Chinchina",
-  ],
-},
-  direccion: { type: String, required: true, trim: true },
-  categoria: {
-    type: String,
-    required: true,
-    enum: [
-  "Agricultura y Campo",
-  "Almacenes y Supermercados",
-  "Automotriz",
-  "Cafeterías",
-  "Clínicas",
-  "Comidas y Restaurantes",
-  "Consultorías",
-  "Educación y Capacitación",
-  "Electrodomésticos",
-  "Ferreterías",
-  "Floristerías",
-  "Gimnasios",
-  "Hoteles y Alojamiento",
-  "Inmobiliarias",
-  "Joyería y Accesorios",
-  "Jurídico",
-  "Laboratorios Clínicos",
-  "Mascotas",
-  "Odontología",
-  "Ópticas",
-  "Papelería y Librerías",
-  "Pastelerías",
-  "Pizzerías",
-  "Ropa de Hombres",
-  "Ropa de Mujeres",
-  "Ropa de Niños",
-  "Ropa Deportiva",
-  "Salones de Belleza",
-  "SPA",
-  "Seguridad",
-  "Tecnología y Desarrollo",
-  "Tiendas Deportivas",
-  "Talleres de Mecánica",
-  "Veterinarias",
-  "Vidrierías"
-],
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 1,
   },
-  telefonoWhatsapp: { type: String, required: true, trim: true },
-  fotos: [{ url: String, public_id: String }],
-  descripcionVentas: { type: String, required: true, trim: true },
-  paginaWeb: { type: String, trim: true, default: "" },
-  redesSociales: { type: String, trim: true, default: "" },
-  fechaCreacion: { type: Date, default: Date.now },
-  activa: { type: Boolean, default: true },
-  reseñas: [reseñaSchema],
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("image/")) {
+      return cb(new Error("Solo se permiten imágenes"));
+    }
+
+    cb(null, true);
+  },
 });
 
-const Tienda = mongoose.model("Tienda", tiendaSchema);
+// =====================================================
+// CONEXIÓN MONGODB
+// =====================================================
 
-// =================== FUNCIONES AUX ===================
-const subirImagenCloudinary = async (buffer, fileName) => {
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log("=================================");
+    console.log("✅ CONECTADO A MONGODB");
+    console.log("=================================");
+  })
+  .catch((error) => {
+    console.error("❌ ERROR MONGODB:", error);
+  });
+
+
+// =====================================================
+// MUNICIPIOS HABILITADOS
+// =====================================================
+
+const MUNICIPIOS = [
+  "Armenia",
+  "Bagadó",
+  "Bugalagrande",
+  "Cali",
+  "Cartago",
+  "Certegui",
+  "Condoto",
+  "Dosquebradas",
+  "El Cantón de San Pablo",
+  "La Tebaida",
+  "La Unión",
+  "La Victoria",
+  "Manizales",
+  "Montenegro",
+  "Novita",
+  "Pereira",
+  "Quibdó",
+  "Roldanillo",
+  "Salento",
+  "San Francisco",
+  "San José del Palmar",
+  "Subachoque",
+  "Tabio",
+  "Tadó",
+  "Toro",
+  "Tuluá",
+  "Viterbo",
+  "Zarzal",
+];
+
+
+// =====================================================
+// TIPOS DE REPORTE
+// =====================================================
+
+const TIPOS_REPORTE = [
+  "Necesito ayuda",
+  "Daños en mi vivienda",
+  "Persona no localizada",
+  "Estoy a salvo",
+  "Quiero ofrecer ayuda",
+  "Otro reporte",
+];
+
+
+// =====================================================
+// SCHEMA REPORTE
+// =====================================================
+
+const emergenciaSchema = new mongoose.Schema(
+  {
+    nombre: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 150,
+    },
+
+    ciudad: {
+      type: String,
+      required: true,
+      trim: true,
+      enum: MUNICIPIOS,
+    },
+
+    direccion: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 250,
+    },
+
+    tipoReporte: {
+      type: String,
+      required: true,
+      enum: TIPOS_REPORTE,
+    },
+
+    telefonoWhatsapp: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 20,
+    },
+
+    estadoVivienda: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 100,
+    },
+
+    personasAfectadas: {
+      type: Number,
+      default: 1,
+      min: 1,
+      max: 1000,
+    },
+
+    necesidades: {
+      type: [String],
+      default: [],
+    },
+
+    descripcion: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 2000,
+    },
+
+    // =================================================
+    // FOTO
+    // SOLO SE UTILIZA PARA PERSONA NO LOCALIZADA
+    // =================================================
+
+    foto: {
+      url: {
+        type: String,
+        default: "",
+      },
+
+      public_id: {
+        type: String,
+        default: "",
+      },
+    },
+
+    // =================================================
+    // UBICACIÓN PARA FUTURO MAPA
+    // =================================================
+
+    latitud: {
+      type: Number,
+      default: null,
+    },
+
+    longitud: {
+      type: Number,
+      default: null,
+    },
+
+    // =================================================
+    // CONTROL
+    // =================================================
+
+    activa: {
+      type: Boolean,
+      default: true,
+    },
+
+    fechaCreacion: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+
+// Índices para poder generar estadísticas rápidamente
+
+emergenciaSchema.index({
+  ciudad: 1,
+  tipoReporte: 1,
+});
+
+emergenciaSchema.index({
+  fechaCreacion: -1,
+});
+
+emergenciaSchema.index({
+  activa: 1,
+});
+
+
+const Emergencia = mongoose.model(
+  "Emergencia",
+  emergenciaSchema
+);
+
+
+// =====================================================
+// CLOUDINARY
+// =====================================================
+
+const subirFotoEmergencia = async (
+  buffer,
+  reporteId
+) => {
   return new Promise((resolve, reject) => {
     cloudinary.uploader
       .upload_stream(
         {
-          folder: "tiendasapp",
-          public_id: fileName,
+          // Cada reporte tendrá su propia carpeta
+          folder: `tiendasapp/emergencias/${reporteId}`,
+
+          public_id: "persona",
+
+          resource_type: "image",
+
           transformation: [
-            { width: 800, height: 600, crop: "fill", quality: "auto" },
+            {
+              width: 1000,
+              height: 1000,
+              crop: "limit",
+            },
+            {
+              quality: "auto",
+            },
           ],
         },
+
         (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
+          if (error) {
+            reject(error);
+          } else {
+            resolve(result);
+          }
         }
       )
       .end(buffer);
   });
 };
 
-// =================== RUTAS API ===================
 
-// Categorías
-app.get("/api/categorias", (req, res) => {
-  res.json([
-    "Agricultura y Campo",
-  "Almacenes y Supermercados",
-  "Automotriz",
-  "Cafeterías",
-  "Clínicas",
-  "Comidas y Restaurantes",
-  "Consultorías",
-  "Educación y Capacitación",
-  "Electrodomésticos",
-  "Ferreterías",
-  "Floristerías",
-  "Gimnasios",
-     "Hoteles y Alojamiento",
-  "Inmobiliarias",
-  "Joyería y Accesorios",
-  "Jurídico",
-  "Laboratorios Clínicos",
-  "Mascotas",
-  "Odontología",
-  "Ópticas",
-  "Papelería y Librerías",
-  "Pastelerías",
-  "Pizzerías",
-  "Ropa de Hombres",
-  "Ropa de Mujeres",
-  "Ropa de Niños",
-  "Ropa Deportiva",
-  "Salones de Belleza",
-  "SPA",
-  "Seguridad",
-    "Tecnología y Desarrollo",
-  "Tiendas Deportivas",
-  "Talleres de Mecánica",
-  "Veterinarias",
-  "Vidrierías"
-  ]);
-});
+// =====================================================
+// HEALTH CHECK
+// =====================================================
 
-// Crear tienda
-app.post("/api/tiendas", upload.array("fotos", 3), async (req, res) => {
-  try {
-    const {
-      nombreEstablecimiento,
-      ciudad,
-      direccion,
-      categoria,
-      telefonoWhatsapp,
-      descripcionVentas,
-      paginaWeb,
-      redesSociales,
-    } = req.body;
-
-    if (
-      !nombreEstablecimiento ||
-      !ciudad ||
-      !direccion ||
-      !categoria ||
-      !telefonoWhatsapp ||
-      !descripcionVentas
-) {
-      return res.status(400).json({ error: "Faltan campos obligatorios" });
-    }
-
-    // Procesar fotos
-    const fotosSubidas = [];
-    if (req.files && req.files.length > 0) {
-      for (let i = 0; i < req.files.length; i++) {
-        const file = req.files[i];
-        const fileName = `${Date.now()}_${i}_${nombreEstablecimiento.replace(
-          /\s+/g,
-          "_"
-        )}`;
-
-        try {
-          const resultado = await subirImagenCloudinary(file.buffer, fileName);
-          fotosSubidas.push({
-            url: resultado.secure_url,
-            public_id: resultado.public_id,
-          });
-        } catch (error) {
-          console.error(`❌ Error subiendo imagen ${i + 1}:`, error);
-        }
-      }
-    }
-
-   const nuevaTienda = new Tienda({
-      nombreEstablecimiento,
-      ciudad,
-      direccion,
-      categoria,
-      telefonoWhatsapp: telefonoWhatsapp.replace(/\D/g, ""),
-      fotos: fotosSubidas,
-      descripcionVentas,
-      paginaWeb: paginaWeb || "",
-      redesSociales: redesSociales || "",
-});
-
-    const tiendaGuardada = await nuevaTienda.save();
-    res.status(201).json({
-      mensaje: "Tienda registrada exitosamente",
-      tienda: tiendaGuardada,
-    });
-  } catch (error) {
-    console.error("❌ Error registrando tienda:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
-  }
-});
-
-// Listar tiendas por categoría
-app.get("/api/tiendas/categoria/:categoria", async (req, res) => {
-  try {
-    const tiendas = await Tienda.find({
-      categoria: req.params.categoria,
-      activa: true,
-    }).sort({ nombreEstablecimiento: 1 });
-    res.json(tiendas);
-  } catch (error) {
-    console.error("❌ Error obteniendo tiendas por categoría:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
-  }
-});
-
-// Obtener tienda por ID (validando ObjectId)
-app.get("/api/tiendas/:id", async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ error: "ID inválido" });
-    }
-
-    const tienda = await Tienda.findById(req.params.id);
-    if (!tienda) return res.status(404).json({ error: "Tienda no encontrada" });
-
-    res.json(tienda);
-  } catch (error) {
-    console.error("❌ Error obteniendo tienda:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
-  }
-});
-
-// Todas las tiendas
-app.get("/api/tiendas", async (req, res) => {
-  try {
-    const tiendas = await Tienda.find({ activa: true }).sort({
-      nombreEstablecimiento: 1,
-    });
-    res.json(tiendas);
-  } catch (error) {
-    console.error("❌ Error obteniendo tiendas:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
-  }
-});
-
-// ciudad
-app.get("/api/tiendas/ciudad/:ciudad", async (req, res) => {
-  try {
-
-    const tiendas = await Tienda.find({
-      ciudad: req.params.ciudad,
-      activa: true,
-    }).sort({
-      nombreEstablecimiento: 1,
-    });
-
-    res.json(tiendas);
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      error: "Error interno del servidor",
-    });
-
-  }
-});
-
-app.get("/api/tiendas/ciudad/:ciudad/categoria/:categoria", async (req, res) => {
-
-    try{
-
-        const tiendas=await Tienda.find({
-
-            ciudad:req.params.ciudad,
-
-            categoria:req.params.categoria,
-
-            activa:true
-
-        }).sort({
-
-            nombreEstablecimiento:1
-
-        });
-
-        res.json(tiendas);
-
-    }catch(error){
-
-        console.error(error);
-
-        res.status(500).json({
-            error:"Error interno"
-        });
-
-    }
-
-});
-// Reseñas
-app.get("/api/tiendas/:id/reviews", async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ error: "ID inválido" });
-    }
-
-    const tienda = await Tienda.findById(req.params.id).select("reseñas");
-    if (!tienda) return res.status(404).json({ error: "Tienda no encontrada" });
-
-    res.json(tienda.reseñas);
-  } catch (error) {
-    console.error("❌ Error obteniendo reseñas:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
-  }
-});
-
-app.post("/api/tiendas/:id/reviews", async (req, res) => {
-  try {
-    const { usuario, comentario, calificacion } = req.body;
-
-    if (!usuario || !calificacion) {
-      return res
-        .status(400)
-        .json({ error: "Usuario y calificación son obligatorios" });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ error: "ID inválido" });
-    }
-
-    const tienda = await Tienda.findById(req.params.id);
-    if (!tienda) return res.status(404).json({ error: "Tienda no encontrada" });
-
-    const nuevaReseña = { usuario, comentario, calificacion };
-    tienda.reseñas.push(nuevaReseña);
-    await tienda.save();
-
-    res.status(201).json({
-      mensaje: "Reseña agregada con éxito",
-      reseña: nuevaReseña,
-    });
-  } catch (error) {
-    console.error("❌ Error agregando reseña:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
-  }
-});
-
-// Health check
 app.get("/health", (req, res) => {
   res.json({
     status: "OK",
-    message: "Servidor funcionando correctamente",
-    timestamp: new Date().toISOString(),
+    servicio: "Sistema de Ayuda Ciudadana",
+    fecha: new Date().toISOString(),
   });
 });
 
-// Manejo de rutas inválidas
-app.use("*", (req, res) => {
-  res.status(404).json({ error: "Ruta no encontrada" });
+
+// =====================================================
+// MUNICIPIOS
+// =====================================================
+
+app.get("/api/municipios", (req, res) => {
+  res.json(MUNICIPIOS);
 });
 
-// =================== INICIAR SERVIDOR ===================
+
+// =====================================================
+// TIPOS DE REPORTE
+// =====================================================
+
+app.get("/api/tipos-reporte", (req, res) => {
+  res.json(TIPOS_REPORTE);
+});
+
+
+// =====================================================
+// CREAR REPORTE
+// =====================================================
+
+app.post(
+  "/api/emergencias",
+  upload.single("foto"),
+  async (req, res) => {
+    try {
+      const {
+        nombre,
+        ciudad,
+        direccion,
+        tipoReporte,
+        telefonoWhatsapp,
+        estadoVivienda,
+        personasAfectadas,
+        necesidades,
+        descripcion,
+        latitud,
+        longitud,
+      } = req.body;
+
+
+      // =================================================
+      // VALIDACIONES
+      // =================================================
+
+      if (!nombre || !nombre.trim()) {
+        return res.status(400).json({
+          error: "El nombre es obligatorio",
+        });
+      }
+
+      if (!ciudad) {
+        return res.status(400).json({
+          error: "La ciudad es obligatoria",
+        });
+      }
+
+      if (!MUNICIPIOS.includes(ciudad)) {
+        return res.status(400).json({
+          error: "El municipio seleccionado no está habilitado",
+        });
+      }
+
+      if (!direccion || !direccion.trim()) {
+        return res.status(400).json({
+          error: "La dirección es obligatoria",
+        });
+      }
+
+      if (!tipoReporte) {
+        return res.status(400).json({
+          error: "El tipo de reporte es obligatorio",
+        });
+      }
+
+      if (!TIPOS_REPORTE.includes(tipoReporte)) {
+        return res.status(400).json({
+          error: "Tipo de reporte inválido",
+        });
+      }
+
+      if (
+        !telefonoWhatsapp ||
+        !telefonoWhatsapp.trim()
+      ) {
+        return res.status(400).json({
+          error: "El teléfono es obligatorio",
+        });
+      }
+
+      if (!descripcion || !descripcion.trim()) {
+        return res.status(400).json({
+          error: "La descripción es obligatoria",
+        });
+      }
+
+
+      // =================================================
+      // FOTO
+      // =================================================
+
+      if (
+        tipoReporte === "Persona no localizada" &&
+        !req.file
+      ) {
+        return res.status(400).json({
+          error:
+            "Debes adjuntar una fotografía de la persona no localizada",
+        });
+      }
+
+
+      // Nadie puede subir fotografías para otro tipo
+      // de reporte.
+
+      if (
+        tipoReporte !== "Persona no localizada" &&
+        req.file
+      ) {
+        return res.status(400).json({
+          error:
+            "La fotografía solamente está permitida para personas no localizadas",
+        });
+      }
+
+
+      // =================================================
+      // NECESIDADES
+      // =================================================
+
+      let necesidadesArray = [];
+
+      if (necesidades) {
+        try {
+          necesidadesArray =
+            typeof necesidades === "string"
+              ? JSON.parse(necesidades)
+              : necesidades;
+
+          if (!Array.isArray(necesidadesArray)) {
+            necesidadesArray = [];
+          }
+        } catch (error) {
+          necesidadesArray = [];
+        }
+      }
+
+
+      // =================================================
+      // CREAR REPORTE
+      // =================================================
+
+      const nuevoReporte = new Emergencia({
+        nombre: nombre.trim(),
+
+        ciudad,
+
+        direccion: direccion.trim(),
+
+        tipoReporte,
+
+        telefonoWhatsapp:
+          telefonoWhatsapp.replace(/\D/g, ""),
+
+        estadoVivienda:
+          estadoVivienda || "",
+
+        personasAfectadas:
+          Number(personasAfectadas) || 1,
+
+        necesidades:
+          necesidadesArray,
+
+        descripcion:
+          descripcion.trim(),
+
+        latitud:
+          latitud ? Number(latitud) : null,
+
+        longitud:
+          longitud ? Number(longitud) : null,
+      });
+
+
+      const reporteGuardado =
+        await nuevoReporte.save();
+
+
+      // =================================================
+      // SUBIR FOTO
+      // =================================================
+
+      if (
+        tipoReporte === "Persona no localizada" &&
+        req.file
+      ) {
+        try {
+          const resultado =
+            await subirFotoEmergencia(
+              req.file.buffer,
+              reporteGuardado._id.toString()
+            );
+
+
+          reporteGuardado.foto = {
+            url: resultado.secure_url,
+            public_id: resultado.public_id,
+          };
+
+
+          await reporteGuardado.save();
+
+
+          console.log(
+            "📸 Foto guardada en Cloudinary:",
+            reporteGuardado._id.toString()
+          );
+
+        } catch (error) {
+
+          console.error(
+            "❌ Error subiendo fotografía:",
+            error
+          );
+
+          // Eliminamos el reporte porque si se trata
+          // de una persona no localizada necesitamos
+          // conservar el registro completo.
+
+          await Emergencia.findByIdAndDelete(
+            reporteGuardado._id
+          );
+
+          return res.status(500).json({
+            error:
+              "No fue posible guardar la fotografía. El reporte no fue creado.",
+          });
+        }
+      }
+
+
+      // =================================================
+      // RESPUESTA
+      // =================================================
+
+      console.log(
+        "================================="
+      );
+
+      console.log(
+        "🚨 NUEVO REPORTE"
+      );
+
+      console.log(
+        "ID:",
+        reporteGuardado._id.toString()
+      );
+
+      console.log(
+        "Ciudad:",
+        reporteGuardado.ciudad
+      );
+
+      console.log(
+        "Tipo:",
+        reporteGuardado.tipoReporte
+      );
+
+      console.log(
+        "================================="
+      );
+
+
+      res.status(201).json({
+        ok: true,
+
+        mensaje:
+          "Reporte registrado correctamente",
+
+        reporte: {
+          id: reporteGuardado._id,
+
+          ciudad:
+            reporteGuardado.ciudad,
+
+          tipoReporte:
+            reporteGuardado.tipoReporte,
+
+          fecha:
+            reporteGuardado.fechaCreacion,
+        },
+      });
+
+    } catch (error) {
+
+      console.error(
+        "❌ ERROR CREANDO REPORTE:",
+        error
+      );
+
+      res.status(500).json({
+        ok: false,
+        error:
+          "Error interno del servidor",
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// CONSULTAR REPORTES
+// =====================================================
+//
+// Esta ruta nos servirá posteriormente para el
+// panel de autoridades y el mapa.
+//
+
+app.get(
+  "/api/emergencias",
+  async (req, res) => {
+    try {
+
+      const filtro = {
+        activa: true,
+      };
+
+
+      if (req.query.ciudad) {
+        filtro.ciudad =
+          req.query.ciudad;
+      }
+
+
+      if (req.query.tipoReporte) {
+        filtro.tipoReporte =
+          req.query.tipoReporte;
+      }
+
+
+      const reportes =
+        await Emergencia
+          .find(filtro)
+          .sort({
+            fechaCreacion: -1,
+          });
+
+
+      res.json({
+        ok: true,
+
+        total: reportes.length,
+
+        reportes,
+      });
+
+    } catch (error) {
+
+      console.error(
+        "❌ ERROR CONSULTANDO REPORTES:",
+        error
+      );
+
+      res.status(500).json({
+        ok: false,
+        error:
+          "Error consultando los reportes",
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// OBTENER UN REPORTE
+// =====================================================
+
+app.get(
+  "/api/emergencias/:id",
+  async (req, res) => {
+
+    try {
+
+      if (
+        !mongoose.Types.ObjectId.isValid(
+          req.params.id
+        )
+      ) {
+        return res.status(400).json({
+          error: "ID inválido",
+        });
+      }
+
+
+      const reporte =
+        await Emergencia.findById(
+          req.params.id
+        );
+
+
+      if (!reporte) {
+        return res.status(404).json({
+          error:
+            "Reporte no encontrado",
+        });
+      }
+
+
+      res.json({
+        ok: true,
+        reporte,
+      });
+
+    } catch (error) {
+
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Error obteniendo reporte",
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// ESTADÍSTICAS
+// =====================================================
+//
+// Esta ruta es la base del futuro dashboard.
+//
+
+app.get(
+  "/api/emergencias/estadisticas/resumen",
+  async (req, res) => {
+
+    try {
+
+      const [
+        total,
+        porCiudad,
+        porTipo,
+        personas,
+      ] = await Promise.all([
+
+        Emergencia.countDocuments({
+          activa: true,
+        }),
+
+        Emergencia.aggregate([
+          {
+            $match: {
+              activa: true,
+            },
+          },
+
+          {
+            $group: {
+              _id: "$ciudad",
+              cantidad: {
+                $sum: 1,
+              },
+            },
+          },
+
+          {
+            $sort: {
+              cantidad: -1,
+            },
+          },
+        ]),
+
+        Emergencia.aggregate([
+          {
+            $match: {
+              activa: true,
+            },
+          },
+
+          {
+            $group: {
+              _id: "$tipoReporte",
+              cantidad: {
+                $sum: 1,
+              },
+            },
+          },
+
+          {
+            $sort: {
+              cantidad: -1,
+            },
+          },
+        ]),
+
+        Emergencia.aggregate([
+          {
+            $match: {
+              activa: true,
+            },
+          },
+
+          {
+            $group: {
+              _id: null,
+
+              personas: {
+                $sum: "$personasAfectadas",
+              },
+            },
+          },
+        ]),
+      ]);
+
+
+      res.json({
+        ok: true,
+
+        totalReportes: total,
+
+        personasAfectadas:
+          personas.length > 0
+            ? personas[0].personas
+            : 0,
+
+        porCiudad,
+
+        porTipo,
+      });
+
+    } catch (error) {
+
+      console.error(
+        "❌ ERROR ESTADÍSTICAS:",
+        error
+      );
+
+      res.status(500).json({
+        error:
+          "Error obteniendo estadísticas",
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// 404
+// =====================================================
+
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Ruta no encontrada",
+  });
+});
+
+
+// =====================================================
+// ERRORES MULTER
+// =====================================================
+
+app.use(
+  (error, req, res, next) => {
+
+    if (
+      error instanceof multer.MulterError
+    ) {
+
+      if (
+        error.code ===
+        "LIMIT_FILE_SIZE"
+      ) {
+        return res.status(400).json({
+          error:
+            "La fotografía no puede superar los 5 MB",
+        });
+      }
+
+      if (
+        error.code ===
+        "LIMIT_FILE_COUNT"
+      ) {
+        return res.status(400).json({
+          error:
+            "Solo se permite una fotografía",
+        });
+      }
+
+      return res.status(400).json({
+        error:
+          "Error procesando la fotografía",
+      });
+    }
+
+
+    if (error) {
+
+      console.error(
+        "❌ ERROR:",
+        error
+      );
+
+      return res.status(400).json({
+        error:
+          error.message ||
+          "Error procesando la solicitud",
+      });
+    }
+
+
+    next();
+  }
+);
+
+
+// =====================================================
+// INICIAR SERVIDOR
+// =====================================================
+
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
-  console.log(`📋 API Categorías: http://localhost:${PORT}/api/categorias`);
+
+  console.log("");
+  console.log(
+    "🇨🇴 ================================="
+  );
+
+  console.log(
+    "🇨🇴 SISTEMA DE AYUDA CIUDADANA"
+  );
+
+  console.log(
+    "🇨🇴 ================================="
+  );
+
+  console.log(
+    `🚀 Puerto: ${PORT}`
+  );
+
+  console.log(
+    `❤️ Health: /health`
+  );
+
+  console.log(
+    `🚨 Reportes: /api/emergencias`
+  );
+
+  console.log(
+    `📊 Estadísticas: /api/emergencias/estadisticas/resumen`
+  );
+
+  console.log("");
 });
